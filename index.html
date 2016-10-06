@@ -1,0 +1,443 @@
+<html>
+<head>
+
+<style>
+.consensus {
+  border: 1px solid black;
+  border-radius: 5px;
+  padding: 5px;
+  text-align : center;
+  vertical-align : middle;
+  background: #E6E6FA;
+  font-size: large;
+  font-family : sans-serif;
+}
+
+h1 {
+  font-family : sans-serif;
+}
+</style>
+<script src="http://localhost/~hughdickinson/JQuery/jquery-3.1.0.min.js"></script>
+<script type="text/javascript">
+
+// This is called when the DOM is ready
+$( document ).ready(function(){
+  //console.log('$( document ).ready');
+});
+
+// This is called when all of the document elements have loaded
+$( window ).on('load', function(){
+  //console.log('$( window ).load');
+  var cs = new ClassifiedSubject(3460, document.getElementById('subjectCanvas'));
+  cs.loadSubjectLines();
+});
+
+// Test ES6 object model
+class ClassifiedBox {
+    constructor (x, y, width, height, numBoxesMarked, boxLineStats, telegramData, fullRenderCallback) {
+        this.colour = '#0000FF';
+        this.dashPattern = [3, 3];
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+        this.boxLineStats = boxLineStats;
+        this.numBoxesMarked = numBoxesMarked;
+        this.telegramData = telegramData;
+        this.fullRenderCallback = fullRenderCallback;
+        this.firstRender = true;
+        this.showingBoxDetailsDiv = false;
+        this.boxDetailsDiv = null;
+    }
+
+    render(){
+      this.canvasContext.beginPath();
+      this.canvasContext.rect(this.x,this.y,this.width,this.height);
+      this.canvasContext.setLineDash(this.dashPattern);
+      this.canvasContext.strokeStyle = this.colour;
+      this.canvasContext.stroke();
+    }
+
+    renderInCanvasContext(canvas, context){
+      this.canvas = canvas;
+      this.canvasContext = context;
+
+      if(this.firstRender){
+        this.firstRender = false;
+        /* add an event listener to the canvas but bind the execution
+        * context to this ClassifiedLine instance.
+        */
+        this.canvas.addEventListener('mousemove', this.respondToMoveEventListener.bind(this), false);
+        this.canvas.addEventListener('click', this.respondToClickEventListener.bind(this), false);
+      }
+
+      this.render();
+    }
+
+    mouseIsOver(event){
+
+      var rect = this.canvas.getBoundingClientRect();
+
+      var mouseCoords =  {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top
+      };
+
+      var mouseIsOverVertical = Math.abs(mouseCoords.x - this.x) < 10;
+      mouseIsOverVertical |= Math.abs(mouseCoords.x - (this.x + this.width)) < 10;
+
+      var mouseIsOverHorizontal = Math.abs(mouseCoords.y - this.y) < 10;
+      mouseIsOverHorizontal |= Math.abs(mouseCoords.y - (this.y + this.height)) < 10;
+
+      var mouseIsWithinHorizontal = mouseCoords.y < this.y + this.height;
+      mouseIsWithinHorizontal &= mouseCoords.y > this.y;
+
+      var mouseIsWithinVertical = mouseCoords.x < this.x + this.width;
+      mouseIsWithinVertical &= mouseCoords.x > this.x;
+
+      var mouseIsOver = (mouseIsOverVertical && mouseIsWithinHorizontal);
+      mouseIsOver |= (mouseIsOverHorizontal && mouseIsWithinVertical);
+
+      return mouseIsOver;
+    }
+
+    renderBoxDetails(){
+      if (!this.showingBoxDetailsDiv){
+        if (this.boxDetailsDiv == null){
+          var boxHtml = "Consensus of " + this.numBoxesMarked.toString() + " marked boxes.</br>";
+          boxHtml += "Box contains " + this.boxLineStats['numLines'] + " lines.</br>"
+          boxHtml += "Box text reliability, R<sub>box</sub> = " + this.boxLineStats['reliability'] + ".</br>"
+          boxHtml += "Collection: " + this.telegramData['collection'] + ", Ledger: " + this.telegramData['ledger']+ ", Page: " + this.telegramData['page'] + ", Telegram: " + this.telegramData['telegramId'] + "</br>";
+          this.boxDetailsDiv = $("<div/>",{
+            "class" : "consensus",
+            "html" : boxHtml
+          });
+          this.boxDetailsDiv.css({
+            position : "absolute",
+            top : (this.y + 60).toString() + "px",
+            left : (this.x + this.width + 20).toString() + "px"
+          });
+        }
+        this.boxDetailsDiv.appendTo("#contentDiv");
+        this.showingBoxDetailsDiv = true;
+      }
+    }
+
+    hideBoxDetails(){
+      if (this.boxDetailsDiv != null && this.showingBoxDetailsDiv){
+        this.boxDetailsDiv.detach();
+        this.showingBoxDetailsDiv = false;
+      }
+    }
+
+    respondToClickEventListener(event){
+      if(this.hover){
+        this.renderBoxDetails();
+      }
+      else{
+        this.hideBoxDetails();
+      }
+    }
+
+    respondToMoveEventListener(event){
+
+      if(!this.hover && this.mouseIsOver(event)){
+        this.hover = true;
+        this.colour = '#FF00FF';
+        this.fullRenderCallback();
+      }
+      else if(this.hover && !this.mouseIsOver(event)){
+        this.hover = false;
+        this.colour = '#0000FF';
+        this.fullRenderCallback();
+      }
+    }
+}
+
+function ClassifiedLine(bestIndex, x1, y1, x2, y2, words, lineReliability, fullRenderCallback){
+
+  this.x1 = x1;
+  this.x2 = x2;
+  this.y1 = y1;
+  this.y2 = y2;
+  this.bestIndex = bestIndex;
+  this.words = words;
+  this.lineReliability = lineReliability;
+  this.fullRenderCallback = fullRenderCallback;
+  this.consensusDiv = null;
+  this.consensusSentence = null;
+  this.showingConsensusDiv = false;
+  this.colour = '#000000';
+  this.firstRender = true;
+  this.hover = false;
+  this.canvas = null;
+  this.canvasContext = null;
+}
+
+ClassifiedLine.prototype = {
+
+  constructor : ClassifiedLine,
+
+  render : function(){
+    //console.log('render ' + this.bestIndex.toString()+ this.colour);
+    this.canvasContext.beginPath();
+    this.canvasContext.moveTo(this.x1, this.y1);
+    this.canvasContext.lineTo(this.x2, this.y2);
+    this.canvasContext.strokeStyle = this.colour;
+    this.canvasContext.stroke();
+  },
+
+  renderInCanvasContext : function (canvas, context){
+    //console.log('renderInContext called');
+
+    this.canvas = canvas;
+    this.canvasContext = context;
+
+    if(this.firstRender){
+      this.firstRender = false;
+      /* add an event listener to the canvas but bind the execution
+      * context to this ClassifiedLine instance.
+      */
+      this.canvas.addEventListener('mousemove', this.respondToMoveEventListener.bind(this), false);
+      this.canvas.addEventListener('click', this.respondToClickEventListener.bind(this), false);
+    }
+
+    this.render();
+
+  },
+
+  respondToClickEventListener : function(event){
+    if(this.hover){
+      this.renderTextConsensus();
+    }
+    else{
+      this.hideTextConsensus();
+    }
+  },
+
+  respondToMoveEventListener :  function(event) {
+    var rect = this.canvas.getBoundingClientRect();
+
+    var mouseCoords =  {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top
+    };
+
+    var meanY = 0.5 * (this.y1 + this.y2);
+    var mouseIsOver = mouseCoords.x > this.x1 && mouseCoords.x < this.x2 && Math.abs(mouseCoords.y - meanY) < 10;
+
+    if(!this.hover && mouseIsOver){
+      this.hover = true;
+      this.colour = '#FF0000';
+      this.fullRenderCallback();
+    }
+    else if(this.hover && !mouseIsOver){
+      this.hover = false;
+      this.colour = '#000000';
+      this.fullRenderCallback();
+    }
+  },
+
+  hideTextConsensus : function(){
+    if (this.consensusDiv != null && this.showingConsensusDiv){
+      this.consensusDiv.detach();
+      this.showingConsensusDiv = false;
+    }
+  },
+
+  generateSentenceForm : function(words){
+    if(!this.consensusSentence){
+      this.consensusSentence = $("<table/>", {
+        "class" : "consensusTable",
+        "width" : "100%"
+      });
+      this.consensusSentence.css({
+        "table-layout" :"fixed",
+        "border" : "1px solid black"
+      });
+      var row = $("<tr/>").appendTo(this.consensusSentence);
+
+      var fieldsWereSkipped = false;
+      for (positions of this.words) {
+        if (positions.length > 1){
+          var select = $("<select/>");
+          for(rankedWord of positions){
+            var option = $("<option/>",{
+              "text" : rankedWord
+            }).appendTo(select);
+          }
+
+          var field = $("<td/>").appendTo(row);
+          field.append(select);
+
+          field.css({
+            "text-align" : "center"
+          });
+        }
+        else{
+          fieldsWereSkipped = true;
+        }
+      }
+      var reliabilityField = $("<td/>", {
+        'html' : "R<sub>L</sub> = " + parseFloat(this.lineReliability).toFixed(3).toString()
+      }).appendTo(row);
+
+      if(fieldsWereSkipped){
+        reliabilityField.css({
+          'color' : 'red'
+        });
+      }
+
+    }
+    return this.consensusSentence;
+  },
+
+  renderTextConsensus : function(){
+  if (!this.showingConsensusDiv){
+    if (this.consensusDiv == null){
+      //console.log(bestWordsString);
+      this.consensusDiv = $("<div/>",{
+        "class" : "consensus"
+      });
+      this.consensusDiv.css({
+        position : "absolute",
+        top : (this.y1 + 10 ).toString() + "px",
+        left : (this.x1 + 20).toString() + "px",
+        "width" : 0.9*this.canvas.width + "px"
+      });
+      this.consensusDiv.append(this.generateSentenceForm());
+    }
+    this.consensusDiv.appendTo("#contentDiv");
+    this.showingConsensusDiv = true;
+  }
+}
+};
+
+function ClassifiedSubject(id, renderCanvas){
+  ////console.log('ClassifiedSubject constructor');
+
+  this.subjectId = id;
+  this.huntingtonId = null;
+  this.reliability = 0.0;
+  this.subjectLines = [];
+  this.subjectBoxes = [];
+  this.subjectImageUrl = null;
+  this.subjectImage = null;
+  this.renderCanvas = renderCanvas;
+  this.renderCanvasContext = null;
+  this.subjectScaling = 0.5;
+
+}
+
+ClassifiedSubject.prototype = {
+
+  constructor : ClassifiedSubject,
+
+  loadSubjectLines : function(){
+    $.ajax({
+      url: "serveConsensus.php",
+
+      data: {
+        id: this.subjectId
+      },
+
+      type: "GET",
+
+      dataType : "json",
+
+      // run callbacks in the context of the ClassifiedSubject instance
+      context : this
+    }).done(function( json ) {
+      this.subjectImageUrl = json['subjectData']['url'];
+      this.huntingtonId = json['subjectData']['huntingtonId'];
+      this.reliability = json['subjectData']['reliability'];
+      for (boxData of json['boxData']){
+        var boxIndex = boxData['bestBoxIndex'];
+        this.subjectBoxes.push(
+          new ClassifiedBox(
+            this.subjectScaling*boxData['meanX'],
+            this.subjectScaling*boxData['meanY'],
+            this.subjectScaling*boxData['meanWidth'],
+            this.subjectScaling*boxData['meanHeight'],
+            boxData['numBoxesMarked'],
+            json['boxLineData']['boxStats'][boxIndex],
+            boxData['telegramData'],
+            this.renderSubjectImage.bind(this)
+          )
+        );
+      }
+      for (lineData of json['lineData']) {
+        this.subjectLines.push(
+          new ClassifiedLine(lineData['bestLineIndex'],
+          this.subjectScaling*lineData['meanX1'],
+          this.subjectScaling*lineData['meanY1'],
+          this.subjectScaling*lineData['meanX2'],
+          this.subjectScaling*lineData['meanY2'],
+          lineData['words'],
+          lineData['lineReliability'],
+          this.renderSubjectImage.bind(this))
+        );
+      }
+      //console.log(this);
+      this.renderSubject();
+    })
+  },
+
+  renderConsensusLines : function(){
+    //console.log('renderConsensusLines called');
+    for(line of this.subjectLines){
+      //var line = this.subjectLines[0];
+      line.renderInCanvasContext(this.renderCanvas, this.renderCanvasContext);
+    }
+  },
+
+  renderConsensusBoxes : function(){
+    for(box of this.subjectBoxes){
+      //var line = this.subjectLines[0];
+      if(box.numBoxesMarked > 1){
+        box.renderInCanvasContext(this.renderCanvas, this.renderCanvasContext);
+      }
+    }
+  },
+
+  renderSubjectImage : function(){
+    //console.log('renderSubjectImage called');
+    this.renderCanvas.width = this.subjectScaling*this.subjectImage.naturalWidth;
+    this.renderCanvas.height = this.subjectScaling*this.subjectImage.naturalHeight;
+    this.renderCanvasContext.clearRect(0, 0, this.subjectScaling*this.subjectImage.naturalWidth, this.subjectScaling*this.subjectImage.naturalHeight);
+    this.renderCanvasContext.drawImage(this.subjectImage, 0, 0, this.subjectScaling*this.subjectImage.naturalWidth, this.subjectScaling*this.subjectImage.naturalHeight);
+    this.renderConsensusLines();
+    this.renderConsensusBoxes();
+  },
+
+  renderSubjectHeader : function(){
+    var header = $('<h1/>',{
+      'html' : "Huntington ID: " + this.huntingtonId + ", R<sub>S</sub> = " + this.reliability
+    }).insertBefore("#contentDiv");
+  },
+
+  renderSubject : function(){
+    this.renderSubjectHeader();
+    //console.log('renderSubject called.');
+    this.renderCanvasContext = this.renderCanvas.getContext('2d');
+
+    // load image from data url
+    this.subjectImage = new Image();
+    this.subjectImage .onload = this.renderSubjectImage.bind(this);
+    this.subjectImage .src = this.subjectImageUrl;
+  }
+
+};
+
+</script>
+<title>Testing DCW Aggregation summary</title>
+</head>
+<body>
+  <div id='outerContentDiv'>
+    <div id='contentDiv' style='border:1px solid black'>
+      <canvas id='subjectCanvas'>
+      </canvas>
+    </div>
+  </div>
+</body>
+</html>

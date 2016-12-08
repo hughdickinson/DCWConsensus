@@ -1,5 +1,100 @@
 <?php
 
+class MetaTagHandler {
+
+  private $dbConnection = null;
+  private $transcriptionIndices = null;
+  private $metaTags = null;
+  private $subjectId = null;
+
+  function __construct($dbConnection, $subjectId){
+    $this->dbConnection = $dbConnection;
+    $this->subjectId = $subjectId;
+  }
+
+  function generateMetaTagQuery(){
+    $metaTagQuery = "SELECT * FROM MetaTags WHERE transcriptionIndex IN (".join(',', $this->transcriptionIndices).")";
+    return $metaTagQuery;
+  }
+
+  function generateTranscriptionIndexQuery(){
+    $transcriptionIndexQuery = "SELECT LineWords.transcriptionIndex FROM Subjects LEFT JOIN (SubjectLines RIGHT JOIN LineWords ON LineWords.lineId = SubjectLines.id) ON (Subjects.id = SubjectLines.subjectId) WHERE Subjects.id = ".$this->subjectId;
+    //var_dump($transcriptionIndexQuery);
+    return $transcriptionIndexQuery;
+  }
+
+  function executeMetaTagQuery(){
+    if(!$metaTagResult = $this->dbConnection->query($this->generateMetaTagQuery())){
+      die('There was an error running the meta-tag query [' . $this->dbConnection->error . ']');
+    }
+    return $metaTagResult;
+  }
+
+  function executeTranscriptionIndexQuery(){
+    if(!$transcriptionIndexResult = $this->dbConnection->query($this->generateTranscriptionIndexQuery())){
+      die('There was an error running the transcription index query [' . $this->dbConnection->error . ']');
+    }
+    return $transcriptionIndexResult;
+  }
+
+  function getTranscriptionIndices(){
+    if(is_null($this->transcriptionIndices)){
+      $transcriptionIndexResult = $this->executeTranscriptionIndexQuery();
+
+      $this->transcriptionIndices = array();
+      while($row = $transcriptionIndexResult->fetch_assoc()){
+        $this->transcriptionIndices[] = $row['transcriptionIndex'];
+      }
+
+      $this->transcriptionIndices = array_unique($this->transcriptionIndices);
+
+      $transcriptionIndexResult->free();
+    }
+    return count($this->transcriptionIndices) > 0 ? $this->transcriptionIndices : null;
+  }
+
+  function getMetaTags(){
+    if(is_null($this->metaTags)){
+      $this->getTranscriptionIndices();
+      $metaTagResult = $this->executeMetaTagQuery();
+
+      $this->metaTags = array();
+      while($row = $metaTagResult->fetch_assoc()){
+        $this->metaTags[] = $row;
+      }
+
+      $metaTagResult->free();
+    }
+    return count($this->metaTags) > 0 ? $this->metaTags : null;
+  }
+
+  function getWordTag($transcriptionIndex, $lineIndex, $start, $end){
+    $metaTags = $this->getMetaTags();
+    foreach ($metaTags as $tagData) {
+      if($tagData["transcriptionIndex"] == $transcriptionIndex && $tagData["bestLineIndex"] == $lineIndex){
+        if($tagData["start"] <= $start && $tagData["end"] >= $end){
+          return $tagData["state"];
+        }
+      }
+    }
+    return false;
+  }
+
+  function setWordTags(&$wordTags, $lineIndex, $wordTranscriptionIndices, $wordStarts, $wordEnds){
+    $lineWords[$row['position']][$row['rank']] = $row['wordText'];
+    $lineWordStarts[$row['position']][$row['rank']] = $row['spanStart'];
+    $lineWordEnds[$row['position']][$row['rank']] = $row['spanEnd'];
+
+    for($iWord = 0; $iWord < count($wordTranscriptionIndices); $iWord++){
+      $wordTags[] = array();
+      for($iRank = 0; $iRank < count($wordTranscriptionIndices[$iWord]); $iRank++){
+        $wordTags[$iWord][] = $this->getWordTag($wordTranscriptionIndices[$iWord][$iRank], $lineIndex, $wordStarts[$iWord][$iRank], $wordEnds[$iWord][$iRank]);
+      }
+    }
+  }
+
+}
+
 class SubjectSelector {
 
   public $dbConnection = null;
@@ -121,7 +216,10 @@ class ConsensusProcessor{
   private $lineResults = null;
   private $boxResults = null;
   private $telegramResults = null;
+  private $metaTagResults = null;
   private $allResults = null;
+
+  private $metaTagHandler = null;
 
   function __construct($dbConnection, $subject){
     $this->subject = $subject;
@@ -130,9 +228,13 @@ class ConsensusProcessor{
     $this->lineResults = array();
     $this->boxResults = array();
     $this->telegramResults = array();
+
+    $this->metaTagHandler = new MetaTagHandler($this->dbConnection, $this->subject);
   }
 
-  function updateResults(&$lineResults, $lastRow, $lineWords){
+  function updateResults(&$lineResults, $lastRow, $lineWords, $lineWordStarts, $lineWordEnds, $lineWordTranscriptionIndices){
+    $lineWordMetaTags = array();
+    $this->metaTagHandler->setWordTags($lineWordMetaTags, $lastRow['bestLineIndex'], $lineWordTranscriptionIndices, $lineWordStarts, $lineWordEnds);
     $lineResults[] = array(
       'id' => $lastRow['id'],
       'subjectId' => $lastRow['subjectId'],
@@ -143,6 +245,10 @@ class ConsensusProcessor{
       'meanY1' => $lastRow['meanY1'],
       'meanY2' => $lastRow['meanY2'],
       'words' => $lineWords,
+      'wordStarts' => $lineWordStarts,
+      'wordEnds' => $lineWordEnds,
+      'wordTags' => $lineWordMetaTags,
+      'wordTransIndices' => $lineWordTranscriptionIndices,
       'lineReliability' => $lastRow['lineReliability']
     );
   }
@@ -178,6 +284,9 @@ class ConsensusProcessor{
   function processSubjectLines(){
     // process textual transcription data
     $lineWords = array();
+    $lineWordStarts = array();
+    $lineWordEnds = array();
+    $lineWordTranscriptionIndices = array();
     $lineIndex = 0;
     $lastRow = null;
 
@@ -187,7 +296,7 @@ class ConsensusProcessor{
         /* initialize and populate a new element in the results structure
         * to represent the line.
         */
-        $this->updateResults($this->lineResults, $lastRow, $lineWords);
+        $this->updateResults($this->lineResults, $lastRow, $lineWords, $lineWordStarts, $lineWordEnds, $lineWordTranscriptionIndices);
 
         $lineIndex = $row['bestLineIndex'];
         $lineWords = array();
@@ -195,10 +304,13 @@ class ConsensusProcessor{
       }
       $lastRow = $row;
       $lineWords[$row['position']][$row['rank']] = $row['wordText'];
+      $lineWordStarts[$row['position']][$row['rank']] = $row['spanStart'];
+      $lineWordEnds[$row['position']][$row['rank']] = $row['spanEnd'];
+      $lineWordTranscriptionIndices[$row['position']][$row['rank']] = $row['transcriptionIndex'];
 
     }
     // append the data for the final line to the results set
-    $this->updateResults($this->lineResults, $lastRow, $lineWords);
+    $this->updateResults($this->lineResults, $lastRow, $lineWords, $lineWordStarts, $lineWordEnds, $lineWordTranscriptionIndices);
     // update the subject summary description using data from the final row
     $this->subjectSummary = array('url' => $lastRow['url'], 'huntingtonId' => $lastRow['huntingtonId'], 'subjectReliability' => $lastRow['subjectReliability']);
   }
@@ -232,6 +344,11 @@ class ConsensusProcessor{
     }
   }
 
+  /*function processMetaTags(){
+    $metaTagHandler = new MetaTagHandler($this->dbConnection, $this->transcriptionIndices);
+    $this->metaTagResults = $metaTagHandler->getMetaTags();
+  }*/
+
   function combineData(){
     $this->allResults = array('subjectData' => array('url' => $this->subjectSummary['url'],
     'huntingtonId' => $this->subjectSummary['huntingtonId'],
@@ -239,7 +356,8 @@ class ConsensusProcessor{
     'telegramData' => $this->telegramResults,
     'boxData' => $this->boxResults,
     'lineData' => $this->lineResults,
-    'boxLineData' => $this->boxLineData);
+    'boxLineData' => $this->boxLineData,
+    'metaTagResults' => $this->metaTagResults);
   }
 
   function freeMysqlResults(){
@@ -260,6 +378,8 @@ class ConsensusProcessor{
     $this->processSubjectTelegrams();
 
     $this->processBoxTelegramsAndLines();
+
+    //$this->processMetaTags();
 
     $this->combineData();
 
@@ -348,7 +468,7 @@ class ReliabilitySamplePrinter{
 }
 
 // INITIAL DATABASE CONNECTION
-$database = new mysqli($_ENV['DCW_MYSQL_HOST'], $_ENV['DCW_MYSQL_USER'], $_ENV['DCW_MYSQL_PASS'], 'dcwConsensus');
+$database = new mysqli($_SERVER['DCW_MYSQL_HOST'], $_SERVER['DCW_MYSQL_USER'], $_SERVER['DCW_MYSQL_PASS'], $_SERVER['DCW_MYSQL_DB']);
 
 if($database->connect_errno > 0){
   die('Unable to connect to database [' . $database->connect_error . ']');

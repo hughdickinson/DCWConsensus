@@ -28,8 +28,31 @@
 h1 {
   font-family : sans-serif;
 }
+
+.unclear-word {
+  font-weight : bold;
+  font-style: italic;
+  font-family: cursive;
+  color: #B3B3B3
+}
+
+.deletion-word {
+  font-weight : bold;
+  text-decoration: line-through;
+  color: #FF0000
+}
+
+.insertion-word {
+  font-weight : bold;
+  color: #0000FF
+}
+
 </style>
-<script src="http://localhost/~hughdickinson/JQuery/jquery-3.1.0.min.js"></script>
+<link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+
+<!--<script src="http://localhost/~hughdickinson/JQuery/jquery-3.1.0.min.js"></script> //-->
+<script src="https://code.jquery.com/jquery-3.1.0.min.js"></script>
+<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
 <script type="text/javascript">
 
 // This is called when the DOM is ready
@@ -39,9 +62,11 @@ $( document ).ready(function(){
 
 // This is called when all of the document elements have loaded
 $( window ).on('load', function(){
+  var customUI = new CustomUIElements;
+  customUI.defineWordSelector();
   //console.log('$( window ).load');
-  // 3460
-  var cs = new ClassifiedSubject(5075, document.getElementById('subjectCanvas'));
+  // 3460, 3198, 2407, 92, 2814
+  var cs = new ClassifiedSubject(629, document.getElementById('subjectCanvas'));
   cs.loadSubjectLines();
 
   var reliabilityExamples = new ReliabilityExamples(10, 2);
@@ -232,7 +257,7 @@ class ClassifiedBox {
 
 class ClassifiedLine {
 
-  constructor(bestIndex, x1, y1, x2, y2, words, lineReliability, fullRenderCallback){
+  constructor(bestIndex, x1, y1, x2, y2, words, metaTags, lineReliability, fullRenderCallback){
 
     this.x1 = x1;
     this.x2 = x2;
@@ -240,6 +265,7 @@ class ClassifiedLine {
     this.y2 = y2;
     this.bestIndex = bestIndex;
     this.words = words;
+    this.metaTags = metaTags;
     this.lineReliability = lineReliability;
     this.fullRenderCallback = fullRenderCallback;
     this.consensusDiv = null;
@@ -253,10 +279,7 @@ class ClassifiedLine {
     this.renderedTextSpan = null;
   }
 
-
-
   render(){
-    //console.log('render ' + this.bestIndex.toString()+ this.colour);
     this.canvasContext.beginPath();
     this.canvasContext.moveTo(this.x1, this.y1);
     this.canvasContext.lineTo(this.x2, this.y2);
@@ -265,7 +288,6 @@ class ClassifiedLine {
   }
 
   renderInCanvasContext(canvas, context){
-    //console.log('renderInContext called');
 
     this.canvas = canvas;
     this.canvasContext = context;
@@ -331,25 +353,66 @@ class ClassifiedLine {
         "width" : "100%"
       });
       this.consensusSentence.css({
-        "table-layout" :"fixed",
         "border" : "1px solid black"
       });
       var row = $("<tr/>").appendTo(this.consensusSentence);
 
       var fieldsWereSkipped = false;
-      for (var positions of this.words) {
-        if (positions.length > 1){
+      for (var positionIndex = 0; positionIndex < this.words.length; ++positionIndex) {
+        var position = this.words[positionIndex];
+        if (position.length > 1){
+          var field = $("<td/>").appendTo(row);
+          field.css( { width : "auto" } )
+
           var select = $("<select/>");
-          for(var rankedWord of positions){
-            var option = $("<option/>",{
-              "text" : rankedWord
-            }).appendTo(select);
+
+          for(var rankedWordIndex = 0; rankedWordIndex < position.length; ++rankedWordIndex){
+            var rankedWord = position[rankedWordIndex];
+            var span = $("<span/>", {
+              "html" : rankedWord,
+            });
+
+            var option = $("<option/>");
+            if(rankedWordIndex == 0){
+              option.prop('selected', 'selected');
+            }
+
+            span.appendTo(option);
+            switch(this.metaTags[positionIndex][rankedWordIndex]){
+              case 'unclear' :
+                option.attr('data-class', "unclear-word");
+                break;
+              case 'insertion' :
+                option.attr('data-class', "insertion-word");
+                break;
+              case 'deletion' :
+                option.attr('data-class', "deletion-word");
+              default :
+                break;
+            }
+            option.appendTo(select);
           }
 
-          var field = $("<td/>").appendTo(row);
           field.append(select);
 
-          field.css({
+          select.wordselectmenu().wordselectmenu( "option", "appendTo", field);
+          select.wordselectmenu( {width : "auto"} );
+          select.wordselectmenu( {
+            create : function( event, ui ){
+              console.log('fired');
+              console.log($(this));
+              console.log(event);
+            }
+          });
+          select.wordselectmenu( {
+            change : function( event, ui ) {
+              console.log($(this));
+              console.log(ui);
+            }
+          }
+        );
+
+        field.css({
             "text-align" : "center"
           });
         }
@@ -382,7 +445,7 @@ class ClassifiedLine {
           position : "absolute",
           top : (this.y1 + 10 ).toString() + "px",
           left : (this.x1 + 20).toString() + "px",
-          "width" : 0.9*this.canvas.width + "px"
+          width : "auto"
         });
         this.consensusDiv.append(this.generateSentenceForm());
       }
@@ -426,6 +489,7 @@ class ClassifiedSubject {
       // run callbacks in the context of the ClassifiedSubject instance
       context : this
     }).done(function( json ) {
+      console.log(json);
       this.subjectImageUrl = json['subjectData']['url'];
       this.huntingtonId = json['subjectData']['huntingtonId'];
       this.reliability = json['subjectData']['reliability'];
@@ -452,6 +516,7 @@ class ClassifiedSubject {
           this.subjectScaling*lineData['meanX2'],
           this.subjectScaling*lineData['meanY2'],
           lineData['words'],
+          lineData['wordTags'],
           lineData['lineReliability'],
           this.renderSubjectImage.bind(this))
         );
@@ -525,6 +590,54 @@ class ClassifiedSubject {
     this.subjectImage .onload = this.renderSubjectImage.bind(this);
     this.subjectImage .src = this.subjectImageUrl;
     this.printConsensusLines();
+  }
+}
+
+class CustomUIElements {
+
+  __construct(){}
+
+  defineWordSelector(){
+    jQuery.widget( "custom.wordselectmenu", jQuery.ui.selectmenu, {
+      // how to render the menu itself
+      /*_renderMenu : function( ul, item ) {
+        console.log($(this));
+      },*/
+      // how to render a single option
+      _renderItem : function( ul, item ){
+        ul.css({
+          width : "auto"
+        });
+        var li = $( "<li/>" );
+        li.addClass(item.element.attr('data-class'));
+        li.css({
+          width : "auto"
+        });
+        var wrapper = $( "<div/>", {
+          text: item.label
+        });
+        wrapper.css({
+          width : "auto"
+        });
+
+        return li.append( wrapper ).appendTo( ul );
+      },
+      // how to render the button
+      _renderButtonItem: function( item ){
+        var buttonItem = $('<span/>',{
+          html : item.label
+        });
+        console.log(item.element);
+        var dataClass = item.element.attr('data-class');
+        if(dataClass){
+          buttonItem.addClass(dataClass);
+        }
+        else{
+          console.log(dataClass);
+        }
+        return buttonItem;
+      }
+    });
   }
 }
 

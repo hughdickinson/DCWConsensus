@@ -99,8 +99,7 @@ ENV/
 # mypy
 .mypy_cache/
 
-## CUSTOM IGNORES FOLLOW
-
+# PROJECT SPECIFIC IGNORES
 serveConsensus.php.orig
 
 .ipynb_checkpoints/TestDcwAggregation-checkpoint.ipynb
@@ -113,8 +112,8 @@ serveConsensus.php.orig
 
 *.tsv
 
-Propaganda*
-
-post-proc-scripts*
-
 *.tar.gz
+
+Propaganda/*
+
+post-proc-scripts/*
